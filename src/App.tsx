@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  signInAnonymously,
+  signInWithEmailAndPassword,
+  signOut,
   onAuthStateChanged
 } from 'firebase/auth';
 import {
@@ -22,7 +23,7 @@ import {
 } from 'firebase/firestore';
 import {
   PlusCircle, FileSpreadsheet, Trash2, Calendar, TrendingUp, Settings, Save, X,
-  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle
+  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle, LogOut
 } from 'lucide-react';
 
 // --- CẤU HÌNH FIREBASE ---
@@ -47,9 +48,16 @@ const APP_ID = 'my-shop-app';
 interface Product {
   id: string;
   name: string;
+  brand?: string;
+  code?: string;
   category: 'dongho' | 'matkinh' | 'phukien' | 'trong' | 'khac';
   price: number;
   stock: number;
+}
+
+interface Brand {
+  id: string;
+  name: string;
 }
 
 interface Transaction {
@@ -88,6 +96,7 @@ export default function ShopManagerApp() {
   // Data States
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
   const [profile, setProfile] = useState<BusinessProfile>({
     name: 'Cửa hàng Mắt Kính - Đồng Hồ A', address: '', taxId: '', location: '', gasUrl: ''
   });
@@ -101,25 +110,45 @@ export default function ShopManagerApp() {
   const [isManualEntry, setIsManualEntry] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [searchProductTerm, setSearchProductTerm] = useState('');
+  const [manualPriceCount, setManualPriceCount] = useState(''); // Price for "Thành tiền" field
 
   // Product Management States
+  // Product Management States
   const [showAddProduct, setShowAddProduct] = useState(false);
-  const [newProdName, setNewProdName] = useState('');
+  const [newProdBrand, setNewProdBrand] = useState('');
+  const [newProdCode, setNewProdCode] = useState('');
   const [newProdCat, setNewProdCat] = useState('dongho');
   const [newProdPrice, setNewProdPrice] = useState('');
   const [newProdStock, setNewProdStock] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Login States
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+
   // --- Auth & Initial Load ---
   useEffect(() => {
-    signInAnonymously(auth).catch((err) => { console.error(err); setLoading(false); });
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      if (!u) setLoading(false);
+      setLoading(false);
     });
     return () => unsubscribeAuth();
   }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err: any) {
+      setAuthError("Lỗi đăng nhập: " + err.message);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
 
   // --- Data Sync ---
   useEffect(() => {
@@ -128,10 +157,12 @@ export default function ShopManagerApp() {
     // 1. Load Profile
     getDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile')).then(snap => {
       if (snap.exists()) setProfile(snap.data() as BusinessProfile);
-      else {
-        const local = localStorage.getItem('s1a_profile');
-        if (local) setProfile(JSON.parse(local));
-      }
+    });
+
+    // 1.1 Load Brands
+    const qBrands = query(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'brands'), orderBy('name'));
+    onSnapshot(qBrands, (snap) => {
+      setBrands(snap.docs.map(d => ({ id: d.id, ...d.data() } as Brand)));
     });
 
     // 2. Load Transactions (Realtime)
@@ -170,10 +201,23 @@ export default function ShopManagerApp() {
 
   // --- Product Logic ---
   const handleAddProduct = async () => {
-    if (!newProdName || !newProdPrice) return;
+    if (!newProdCode || !newProdPrice) { alert("Thiếu mã hoặc giá!"); return; }
     try {
+      // 1. Process Brand
+      let finalBrand = newProdBrand.trim();
+      if (finalBrand && !brands.find(b => b.name.toLowerCase() === finalBrand.toLowerCase())) {
+        // Create new Brand
+        await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'brands'), { name: finalBrand });
+        // No need to wait for reload, it will sync.
+      }
+
+      // 2. Construct Name
+      const fullName = finalBrand ? `${finalBrand} ${newProdCode}`.trim() : newProdCode;
+
       const productData = {
-        name: newProdName,
+        name: fullName,
+        brand: finalBrand,
+        code: newProdCode,
         category: newProdCat,
         price: parseFloat(newProdPrice),
         stock: parseInt(newProdStock) || 0,
@@ -183,7 +227,9 @@ export default function ShopManagerApp() {
       if (editingId) {
         // Update existing product
         await updateDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'products', editingId), {
-          name: newProdName,
+          name: fullName,
+          brand: finalBrand,
+          code: newProdCode,
           category: newProdCat,
           price: parseFloat(newProdPrice),
           stock: parseInt(newProdStock) || 0
@@ -194,12 +240,14 @@ export default function ShopManagerApp() {
       }
 
       setShowAddProduct(false);
-      setNewProdName(''); setNewProdPrice(''); setNewProdStock(''); setEditingId(null);
+      setNewProdBrand(''); setNewProdCode(''); setNewProdPrice(''); setNewProdStock(''); setEditingId(null);
     } catch (e) { alert("Lỗi: " + e); }
   };
 
   const openEditModal = (product: Product) => {
-    setNewProdName(product.name);
+    // If product has brand/code, use them. Else put name into Code.
+    setNewProdBrand(product.brand || '');
+    setNewProdCode(product.code || product.name);
     setNewProdCat(product.category);
     setNewProdPrice(product.price.toString());
     setNewProdStock(product.stock.toString());
@@ -229,7 +277,8 @@ export default function ShopManagerApp() {
     } else {
       if (!selectedProduct) return;
       finalDesc = `${selectedProduct.name} (SL: ${sellQuantity})`;
-      finalAmount = selectedProduct.price * sellQuantity;
+      // Use the manual price count if available
+      finalAmount = manualPriceCount ? parseFloat(manualPriceCount) : (selectedProduct.price * sellQuantity);
       productId = selectedProduct.id;
     }
 
@@ -265,6 +314,8 @@ export default function ShopManagerApp() {
       setSellQuantity(1);
       setCustomDesc('');
       setCustomPrice('');
+      setSearchProductTerm('');
+      setManualPriceCount('');
       alert("Đã bán thành công!");
     } catch (error) {
       alert("Lỗi bán hàng: " + error);
@@ -300,16 +351,46 @@ export default function ShopManagerApp() {
 
   if (loading) return <div className="h-screen flex items-center justify-center text-gray-500">Đang tải cửa hàng...</div>;
 
+  if (!user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100 p-4">
+        <div className="w-full max-w-sm bg-white rounded-xl shadow-lg p-6">
+          <h2 className="text-2xl font-bold text-center text-emerald-700 mb-6 font-mono">My Shop Login</h2>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="text-sm font-bold text-gray-600 block mb-1">Email Admin</label>
+              <input type="email" required className="w-full border p-2 rounded-lg" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@example.com" />
+            </div>
+            <div>
+              <label className="text-sm font-bold text-gray-600 block mb-1">Mật khẩu</label>
+              <input type="password" required className="w-full border p-2 rounded-lg" value={password} onChange={e => setPassword(e.target.value)} placeholder="********" />
+            </div>
+            {authError && <div className="text-red-500 text-sm text-center">{authError}</div>}
+            <button type="submit" className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition-colors">Đăng nhập</button>
+          </form>
+          <div className="mt-4 text-xs text-center text-gray-400">
+            * Yêu cầu tài khoản đã tạo trong Firebase Authentication
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-gray-100 font-sans text-gray-800 max-w-md mx-auto shadow-2xl overflow-hidden relative">
       {/* Header */}
       <div className="bg-emerald-700 text-white p-4 shadow-md z-10">
         <div className="flex justify-between items-center mb-1">
           <h1 className="text-lg font-bold flex items-center gap-2"><Watch size={20} /> Shop Đồng hồ</h1>
-          <button onClick={() => setShowSettings(true)} className="relative p-1">
-            <Settings size={20} />
-            {!profile.gasUrl && <span className="absolute top-0 right-0 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setShowSettings(true)} className="relative p-1">
+              <Settings size={20} />
+              {!profile.gasUrl && <span className="absolute top-0 right-0 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>}
+            </button>
+            <button onClick={handleLogout} className="p-1 hover:text-red-200" title="Đăng xuất">
+              <LogOut size={20} />
+            </button>
+          </div>
         </div>
         <div className="text-xs opacity-90 flex justify-between">
           <span>{profile.name}</span>
@@ -344,17 +425,32 @@ export default function ShopManagerApp() {
                   <>
                     <div>
                       <label className="text-xs font-bold text-gray-500">Chọn sản phẩm</label>
+                      <input
+                        type="text"
+                        placeholder="Gõ để tìm kiếm..."
+                        className="w-full p-2 border border-gray-200 rounded-lg mt-1 text-sm mb-1 bg-gray-50"
+                        value={searchProductTerm}
+                        onChange={e => setSearchProductTerm(e.target.value)}
+                      />
                       <select
-                        className="w-full p-3 border border-gray-200 rounded-lg mt-1 bg-white"
+                        className="w-full p-3 border border-gray-200 rounded-lg bg-white"
                         onChange={(e) => {
                           const prod = products.find(p => p.id === e.target.value);
                           setSelectedProduct(prod || null);
+                          // Auto set price when product selected
+                          if (prod) {
+                            setManualPriceCount((prod.price * sellQuantity).toString());
+                          }
                         }}
                         value={selectedProduct?.id || ''}
                       >
-                        <option value="">-- Chọn --</option>
+                        <option value="">-- Chọn sản phẩm --</option>
                         {CATEGORIES.map(cat => {
-                          const catProds = products.filter(p => p.category === cat.id);
+                          // Filter products based on search term
+                          const catProds = products.filter(p =>
+                            p.category === cat.id &&
+                            (searchProductTerm === '' || p.name.toLowerCase().includes(searchProductTerm.toLowerCase()))
+                          );
                           if (catProds.length === 0) return null;
                           return (
                             <optgroup key={cat.id} label={cat.name}>
@@ -372,13 +468,28 @@ export default function ShopManagerApp() {
                       <div className="flex gap-3">
                         <div className="w-1/3">
                           <label className="text-xs font-bold text-gray-500">Số lượng</label>
-                          <input type="number" min="1" value={sellQuantity} onChange={e => setSellQuantity(parseInt(e.target.value))} className="w-full p-2 border rounded-lg mt-1 text-center font-bold" />
+                          <input
+                            type="number"
+                            min="1"
+                            value={sellQuantity}
+                            onChange={e => {
+                              const qty = parseInt(e.target.value) || 1;
+                              setSellQuantity(qty);
+                              if (selectedProduct) {
+                                setManualPriceCount((selectedProduct.price * qty).toString());
+                              }
+                            }}
+                            className="w-full p-2 border rounded-lg mt-1 text-center font-bold"
+                          />
                         </div>
                         <div className="flex-1">
-                          <label className="text-xs font-bold text-gray-500">Thành tiền</label>
-                          <div className="w-full p-2 bg-emerald-50 border border-emerald-100 rounded-lg mt-1 text-emerald-700 font-bold text-right flex items-center justify-end h-[42px]">
-                            {formatCurrency(selectedProduct.price * sellQuantity)}
-                          </div>
+                          <label className="text-xs font-bold text-gray-500">Thành tiền (có thể sửa)</label>
+                          <input
+                            type="number"
+                            value={manualPriceCount}
+                            onChange={e => setManualPriceCount(e.target.value)}
+                            className="w-full p-2 border border-emerald-300 bg-white rounded-lg mt-1 text-emerald-700 font-bold text-right shadow-sm focus:ring-2 focus:ring-emerald-500"
+                          />
                         </div>
                       </div>
                     )}
@@ -525,12 +636,24 @@ export default function ShopManagerApp() {
       {showAddProduct && (
         <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-xs p-5 shadow-2xl animate-in zoom-in duration-200">
-
             <h3 className="font-bold text-lg mb-3">{editingId ? 'Cập nhật sản phẩm' : 'Thêm Sản Phẩm Mới'}</h3>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-bold text-gray-500">Tên sản phẩm</label>
-                <input className="w-full border p-2 rounded mt-1" autoFocus placeholder="VD: G-Shock GA-100" value={newProdName} onChange={e => setNewProdName(e.target.value)} />
+                <label className="text-xs font-bold text-gray-500">Nhãn hiệu (Brand)</label>
+                <input
+                  list="brand-list"
+                  className="w-full border p-2 rounded mt-1"
+                  placeholder="Chọn hoặc nhập mới..."
+                  value={newProdBrand}
+                  onChange={e => setNewProdBrand(e.target.value)}
+                />
+                <datalist id="brand-list">
+                  {brands.map(b => <option key={b.id} value={b.name} />)}
+                </datalist>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500">Mã sản phẩm</label>
+                <input className="w-full border p-2 rounded mt-1 font-bold text-emerald-800" placeholder="VD: GA-100-1A1" value={newProdCode} onChange={e => setNewProdCode(e.target.value)} />
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500">Loại</label>
@@ -549,7 +672,7 @@ export default function ShopManagerApp() {
                 </div>
               </div>
               <div className="flex gap-2 pt-2">
-                <button onClick={() => { setShowAddProduct(false); setEditingId(null); setNewProdName(''); setNewProdPrice(''); setNewProdStock(''); }} className="flex-1 bg-gray-100 text-gray-600 py-2 rounded-lg font-bold">Hủy</button>
+                <button onClick={() => { setShowAddProduct(false); setEditingId(null); setNewProdBrand(''); setNewProdCode(''); setNewProdPrice(''); setNewProdStock(''); }} className="flex-1 bg-gray-100 text-gray-600 py-2 rounded-lg font-bold">Hủy</button>
                 <button onClick={handleAddProduct} className="flex-1 bg-emerald-600 text-white py-2 rounded-lg font-bold">{editingId ? 'Cập nhật' : 'Lưu'}</button>
               </div>
             </div>
@@ -571,7 +694,7 @@ export default function ShopManagerApp() {
                 <h4 className="text-sm font-bold">Thông tin Hộ KD</h4>
                 <div><label className="text-xs font-bold text-gray-500">Tên</label><input className="w-full border p-2 rounded mt-1" value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></div>
                 <div><label className="text-xs font-bold text-gray-500">MST</label><input className="w-full border p-2 rounded mt-1" value={profile.taxId} onChange={(e) => setProfile({ ...profile, taxId: e.target.value })} /></div>
-                <button onClick={() => { localStorage.setItem('s1a_profile', JSON.stringify(profile)); setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), profile); setShowSettings(false); }} className="w-full bg-emerald-600 text-white py-2 rounded-lg mt-2 flex items-center justify-center gap-2"><Save size={16} /> Lưu</button>
+                <button onClick={() => { setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), profile); setShowSettings(false); }} className="w-full bg-emerald-600 text-white py-2 rounded-lg mt-2 flex items-center justify-center gap-2"><Save size={16} /> Lưu</button>
               </div>
             </div>
           </div>

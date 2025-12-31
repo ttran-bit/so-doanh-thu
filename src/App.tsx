@@ -273,7 +273,7 @@ export default function RevenueBookApp() {
       {/* Header */}
       <div className="bg-emerald-600 text-white p-4 shadow-md z-10">
         <div className="flex justify-between items-center mb-2">
-          <h1 className="text-lg font-bold">Sổ Doanh Thu (S1a)</h1>
+          <h1 className="text-lg font-bold">Sổ Doanh Thu</h1>
           <button onClick={() => setShowSettings(true)} className="p-1 hover:bg-emerald-700 rounded-full relative">
             <Settings size={20} />
             {!profile.gasUrl && <span className="absolute top-0 right-0 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>}
@@ -322,7 +322,7 @@ export default function RevenueBookApp() {
                   <input 
                     type="text" 
                     required
-                    placeholder="Ví dụ: Bán 5kg Gạo ST25"
+                    placeholder="Ví dụ: Bán Đồng hồ Saphire nữ"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"

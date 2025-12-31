@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { read, utils } from 'xlsx';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -23,7 +24,7 @@ import {
 } from 'firebase/firestore';
 import {
   PlusCircle, FileSpreadsheet, Trash2, Calendar, TrendingUp, Settings, Save, X,
-  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle, LogOut
+  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle, LogOut, Upload
 } from 'lucide-react';
 
 // --- CẤU HÌNH FIREBASE ---
@@ -349,6 +350,57 @@ export default function ShopManagerApp() {
     link.click();
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = read(data);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const jsonData = utils.sheet_to_json(sheet, { header: 1 });
+
+      let addedCount = 0;
+      let skippedCount = 0;
+
+      // Data starts from row 4 (index 3)
+      for (let i = 1; i < jsonData.length; i++) {
+        const row: any = jsonData[i];
+        // D is index 3
+        const name = row[3];
+        if (!name) break; // Stop if empty
+
+        const price = typeof row[4] === 'number' ? row[4] : parseFloat(row[4]) || 0; // E is index 4
+        const stock = typeof row[5] === 'number' ? row[5] : parseInt(row[5]) || 0; // F is index 5
+
+        // Validate duplicate (Same Name AND Same Price)
+        const exists = products.some(p => p.name === name && p.price === price);
+        if (exists) {
+          skippedCount++;
+          continue;
+        }
+
+        await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'products'), {
+          name: name,
+          price: price,
+          stock: stock,
+          category: 'khac', // Default to 'Khác'
+          createdAt: serverTimestamp()
+        });
+        addedCount++;
+      }
+      alert(`Đã nhập xong!\n- Thêm mới: ${addedCount}\n- Bỏ qua (trùng): ${skippedCount}`);
+    } catch (error) {
+      console.error("Lỗi nhập file:", error);
+      alert("Có lỗi khi đọc file Excel. Vui lòng kiểm tra lại định dạng.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   if (loading) return <div className="h-screen flex items-center justify-center text-gray-500">Đang tải cửa hàng...</div>;
 
   if (!user) {
@@ -532,7 +584,17 @@ export default function ShopManagerApp() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="font-bold text-gray-700 flex items-center gap-2"><Package size={20} /> Kho Hàng</h2>
-              <button onClick={() => setShowAddProduct(true)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1"><PlusCircle size={14} /> Thêm Mới</button>
+              <div className="flex gap-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleImportExcel}
+                  accept=".xlsx, .xls"
+                  className="hidden"
+                />
+                <button onClick={() => fileInputRef.current?.click()} className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1 hover:bg-emerald-100"><Upload size={14} /> Import Excel</button>
+                <button onClick={() => setShowAddProduct(true)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm flex items-center gap-1"><PlusCircle size={14} /> Thêm Mới</button>
+              </div>
             </div>
 
             <div className="relative">

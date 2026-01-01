@@ -465,12 +465,26 @@ export default function ShopManagerApp() {
       let addedCount = 0;
       let skippedCount = 0;
 
+      // Track valid brands to avoid spamming the DB with duplicate brand creation in one go
+      const existingBrandNames = new Set(brands.map(b => b.name.toLowerCase()));
+
       // Data starts from row 4 (index 3)
       for (let i = 1; i < jsonData.length; i++) {
         const row: any = jsonData[i];
         // D is index 3
         const name = row[3];
-        if (!name) break; // Stop if empty
+        if (!name) continue; // Skip if empty name (or break if strict end)
+
+        // Brand is Column C (index 2)
+        let brandName = row[2];
+        if (brandName) {
+          brandName = String(brandName).trim();
+          // Add brand if not exists
+          if (brandName && !existingBrandNames.has(brandName.toLowerCase())) {
+            await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'brands'), { name: brandName });
+            existingBrandNames.add(brandName.toLowerCase()); // Add to local set to avoid re-adding in this loop
+          }
+        }
 
         const price = typeof row[4] === 'number' ? row[4] : parseFloat(row[4]) || 0; // E is index 4
         const stock = typeof row[5] === 'number' ? row[5] : parseInt(row[5]) || 0; // F is index 5
@@ -484,6 +498,7 @@ export default function ShopManagerApp() {
 
         await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'products'), {
           name: name,
+          brand: brandName || '',
           price: price,
           stock: stock,
           category: 'khac', // Default to 'Khác'

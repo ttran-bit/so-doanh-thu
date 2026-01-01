@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { read, utils } from 'xlsx';
+import { read, utils, writeFile } from 'xlsx';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -330,13 +330,115 @@ export default function ShopManagerApp() {
     const today = new Date().toISOString().split('T')[0];
     const currentMonth = today.substring(0, 7);
     let todayTotal = 0, monthTotal = 0, totalRevenue = 0;
+
     transactions.forEach(t => {
       totalRevenue += t.amount;
       if (t.date === today) todayTotal += t.amount;
       if (t.date.startsWith(currentMonth)) monthTotal += t.amount;
     });
-    return { todayTotal, monthTotal, totalRevenue };
-  }, [transactions]);
+
+    // Calculate Brand Stats
+    const brandStats = brands.map(b => {
+      const brandProducts = products.filter(p => p.brand === b.name);
+      const stock = brandProducts.reduce((sum, p) => sum + p.stock, 0);
+      const brandProductIds = brandProducts.map(p => p.id);
+
+      let salesToday = 0;
+      let salesTodayQty = 0;
+      let salesMonth = 0;
+      let salesMonthQty = 0;
+
+      transactions.forEach(t => {
+        if (t.productId && brandProductIds.includes(t.productId)) {
+          if (t.date === today) {
+            salesToday += t.amount;
+            salesTodayQty += (t.quantity || 1);
+          }
+          if (t.date.startsWith(currentMonth)) {
+            salesMonth += t.amount;
+            salesMonthQty += (t.quantity || 1);
+          }
+        }
+      });
+
+      return { name: b.name, stock, salesToday, salesTodayQty, salesMonth, salesMonthQty };
+    });
+
+    // Sort by monthly sales (desc)
+    brandStats.sort((a, b) => b.salesMonth - a.salesMonth);
+
+    return { todayTotal, monthTotal, totalRevenue, brandStats };
+  }, [transactions, products, brands]);
+
+  const handleExportStats = (type: 'day' | 'month' | 'total') => {
+    const today = new Date().toISOString().split('T')[0];
+    const currentMonth = today.substring(0, 7);
+
+    // Filter Transactions
+    let filteredTrans = transactions;
+    let title = "TỔNG HỢP TOÀN BỘ";
+    let filename = `BaoCao_TongHop_${today}`;
+
+    if (type === 'day') {
+      filteredTrans = transactions.filter(t => t.date === today);
+      title = `BÁO CÁO NGÀY ${today}`;
+      filename = `BaoCao_Ngay_${today}`;
+    } else if (type === 'month') {
+      filteredTrans = transactions.filter(t => t.date.startsWith(currentMonth));
+      title = `BÁO CÁO THÁNG ${currentMonth}`;
+      filename = `BaoCao_Thang_${currentMonth}`;
+    }
+
+    // 1. Sheet Chi tiết (Transactions)
+    const transData = filteredTrans.map(t => ({
+      "Ngày": t.date,
+      "Nội dung": t.description,
+      "Số lượng": t.quantity || 1,
+      "Thành tiền": t.amount
+    }));
+    const totalAmount = filteredTrans.reduce((sum, t) => sum + t.amount, 0);
+    transData.push({ "Ngày": "TỔNG", "Nội dung": "", "Số lượng": filteredTrans.reduce((s, t) => s + (t.quantity || 1), 0), "Thành tiền": totalAmount });
+
+    const wsTrans = utils.json_to_sheet(transData);
+
+    // 2. Sheet Thống kê Hãng (Brand Stats for this period)
+    const brandReport = brands.map(b => {
+      const brandProductIds = products.filter(p => p.brand === b.name).map(p => p.id);
+      let brandQty = 0;
+      let brandRev = 0;
+      filteredTrans.forEach(t => {
+        if (t.productId && brandProductIds.includes(t.productId)) {
+          brandQty += (t.quantity || 1);
+          brandRev += t.amount;
+        }
+      });
+      // Only show brands that have sales in this period or stock
+      // But user probably wants all brands listed
+      // Let's list all brands + current stock
+      const stock = products.filter(p => p.brand === b.name).reduce((sum, p) => sum + p.stock, 0);
+      return {
+        "Hãng": b.name,
+        "Tồn kho hiện tại": stock,
+        "SL Bán ra": brandQty,
+        "Doanh thu": brandRev
+      };
+    });
+    // Add total row
+    brandReport.push({
+      "Hãng": "TỔNG CỘNG",
+      "Tồn kho hiện tại": products.reduce((s, p) => s + p.stock, 0),
+      "SL Bán ra": totalAmount > 0 ? filteredTrans.reduce((s, t) => s + (t.quantity || 1), 0) : 0, // Approx
+      "Doanh thu": totalAmount
+    });
+
+    const wsBrands = utils.json_to_sheet(brandReport);
+
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, wsBrands, "TongHop_Hang");
+    utils.book_append_sheet(wb, wsTrans, "ChiTiet_GiaoDich");
+
+    writeFile(wb, `${filename}.xlsx`);
+  };
 
   const exportToCSV = () => {
     const headers = ["Ngày tháng", "Nội dung", "Số tiền"];
@@ -664,9 +766,18 @@ export default function ShopManagerApp() {
         )}
 
         {/* --- TAB: THỐNG KÊ (STATS) --- */}
+        {/* --- TAB: THỐNG KÊ (STATS) --- */}
         {activeTab === 'stats' && (
           <div className="grid grid-cols-1 gap-3">
-            <h2 className="font-bold text-gray-700">Tổng quan</h2>
+            <div className="flex justify-between items-center">
+              <h2 className="font-bold text-gray-700">Tổng quan</h2>
+              <div className="flex gap-1">
+                <button onClick={() => handleExportStats('day')} className="text-[10px] bg-white border px-2 py-1 rounded shadow-sm hover:bg-emerald-50 text-emerald-700 font-bold">Xuất Ngày</button>
+                <button onClick={() => handleExportStats('month')} className="text-[10px] bg-white border px-2 py-1 rounded shadow-sm hover:bg-emerald-50 text-emerald-700 font-bold">Xuất Tháng</button>
+                <button onClick={() => handleExportStats('total')} className="text-[10px] bg-white border px-2 py-1 rounded shadow-sm hover:bg-emerald-50 text-emerald-700 font-bold">Tất Cả</button>
+              </div>
+            </div>
+
             <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-emerald-500">
               <div className="flex items-center gap-2 text-gray-500 mb-1"><Calendar size={16} /><span className="text-xs uppercase font-bold">Hôm nay</span></div>
               <div className="text-2xl font-bold text-gray-800">{formatCurrency(stats.todayTotal)}</div>
@@ -675,6 +786,42 @@ export default function ShopManagerApp() {
               <div className="flex items-center gap-2 text-gray-500 mb-1"><TrendingUp size={16} /><span className="text-xs uppercase font-bold">Tháng này</span></div>
               <div className="text-2xl font-bold text-gray-800">{formatCurrency(stats.monthTotal)}</div>
             </div>
+
+            <h2 className="font-bold text-gray-700 mt-2">Thống kê theo Hãng</h2>
+            <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-gray-50 text-gray-500 font-bold border-b">
+                    <tr>
+                      <th className="p-3 font-extrabold text-xs uppercase min-w-[80px]">Hãng</th>
+                      <th className="p-3 text-right font-extrabold text-xs uppercase">Tồn</th>
+                      <th className="p-3 text-right font-extrabold text-xs uppercase whitespace-nowrap">H.Nay (SL/Tiền)</th>
+                      <th className="p-3 text-right font-extrabold text-xs uppercase whitespace-nowrap">Tháng (SL/Tiền)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.brandStats.map((b, idx) => (
+                      <tr key={idx} className="border-b last:border-0 hover:bg-gray-50">
+                        <td className="p-3 font-medium text-gray-800">{b.name}</td>
+                        <td className="p-3 text-right font-bold text-gray-600">{b.stock}</td>
+                        <td className="p-3 text-right text-emerald-600">
+                          <div className="font-bold">{b.salesTodayQty > 0 ? b.salesTodayQty : '-'}</div>
+                          <div className="text-[10px] opacity-75">{b.salesToday > 0 ? formatCurrency(b.salesToday) : ''}</div>
+                        </td>
+                        <td className="p-3 text-right text-blue-600">
+                          <div className="font-bold">{b.salesMonthQty > 0 ? b.salesMonthQty : '-'}</div>
+                          <div className="text-[10px] opacity-75">{b.salesMonth > 0 ? formatCurrency(b.salesMonth) : ''}</div>
+                        </td>
+                      </tr>
+                    ))}
+                    {stats.brandStats.length === 0 && (
+                      <tr><td colSpan={4} className="p-4 text-center text-gray-400 text-xs">Chưa có dữ liệu hãng</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 text-sm text-yellow-800">
               <p className="font-bold mb-1">Thống kê kho:</p>
               <ul className="list-disc pl-4 text-xs space-y-1">

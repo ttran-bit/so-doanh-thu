@@ -376,16 +376,13 @@ export default function ShopManagerApp() {
 
     // Filter Transactions
     let filteredTrans = transactions;
-    let title = "TỔNG HỢP TOÀN BỘ";
     let filename = `BaoCao_TongHop_${today}`;
 
     if (type === 'day') {
       filteredTrans = transactions.filter(t => t.date === today);
-      title = `BÁO CÁO NGÀY ${today}`;
       filename = `BaoCao_Ngay_${today}`;
     } else if (type === 'month') {
       filteredTrans = transactions.filter(t => t.date.startsWith(currentMonth));
-      title = `BÁO CÁO THÁNG ${currentMonth}`;
       filename = `BaoCao_Thang_${currentMonth}`;
     }
 

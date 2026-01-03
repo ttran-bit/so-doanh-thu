@@ -24,8 +24,9 @@ import {
 } from 'firebase/firestore';
 import {
   PlusCircle, FileSpreadsheet, Trash2, Calendar, TrendingUp, Settings, Save, X,
-  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle, LogOut, Upload
+  Download, Link, Package, Search, Watch, Glasses, ShoppingBag, List, Edit, CheckCircle, LogOut, Upload, Scan
 } from 'lucide-react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
 
 // --- CẤU HÌNH FIREBASE ---
 // BẠN HÃY DÁN LẠI CONFIG FIREBASE CỦA BẠN VÀO ĐÂY NHÉ
@@ -125,6 +126,13 @@ export default function ShopManagerApp() {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Scanner State
+  const [showScanner, setShowScanner] = useState(false);
+  const productsRef = useRef(products);
+  productsRef.current = products;
+  const sellQuantityRef = useRef(sellQuantity);
+  sellQuantityRef.current = sellQuantity;
+
   // Login States
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -184,6 +192,43 @@ export default function ShopManagerApp() {
 
     return () => { unsubTrans(); unsubProd(); };
   }, [user]);
+
+  // --- Scanner Logic ---
+  useEffect(() => {
+    if (showScanner) {
+      // Small delay to ensure DOM is ready
+      const timer = setTimeout(() => {
+        const scanner = new Html5QrcodeScanner(
+          "reader",
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          false
+        );
+
+        scanner.render((decodedText) => {
+          const found = productsRef.current.find(p =>
+            (p.code && p.code.toLowerCase() === decodedText.toLowerCase()) ||
+            p.name.toLowerCase() === decodedText.toLowerCase()
+          );
+
+          if (found) {
+            scanner.clear();
+            setShowScanner(false);
+            setSelectedProduct(found);
+            setManualPriceCount((found.price * sellQuantityRef.current).toString());
+            alert(`Đã tìm thấy: ${found.name}`);
+          }
+        }, (_error) => {
+          // ignore
+        });
+
+        // Cleanup function for this instance
+        return () => {
+          scanner.clear().catch(err => console.error("Scanner clear error", err));
+        };
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [showScanner]);
 
   // --- Helpers ---
   const formatCurrency = (num: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(num);
@@ -598,6 +643,13 @@ export default function ShopManagerApp() {
                         value={searchProductTerm}
                         onChange={e => setSearchProductTerm(e.target.value)}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowScanner(true)}
+                        className="w-full mb-3 bg-blue-50 text-blue-600 border border-blue-100 p-2 rounded-lg flex items-center justify-center gap-2 font-bold text-sm hover:bg-blue-100 transition-colors"
+                      >
+                        <Scan size={18} /> Quét mã QR / Barcode
+                      </button>
                       <select
                         className="w-full p-3 border border-gray-200 rounded-lg bg-white"
                         onChange={(e) => {
@@ -688,6 +740,23 @@ export default function ShopManagerApp() {
                     <li key={p.id}>{p.name} (Còn {p.stock})</li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {/* Scanner Overlay */}
+            {showScanner && (
+              <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl p-4 w-full max-w-sm relative">
+                  <button
+                    onClick={() => setShowScanner(false)}
+                    className="absolute top-2 right-2 text-gray-500 hover:text-red-500"
+                  >
+                    <X size={24} />
+                  </button>
+                  <h3 className="text-center font-bold text-lg mb-4">Quét mã sản phẩm</h3>
+                  <div id="reader" className="w-full"></div>
+                  <p className="text-xs text-center text-gray-400 mt-4">Di chuyển camera vào mã QR hoặc Barcode</p>
+                </div>
               </div>
             )}
           </div>
